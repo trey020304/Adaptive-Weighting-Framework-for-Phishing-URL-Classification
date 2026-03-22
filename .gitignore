@@ -1,2 +1,8 @@
 /DO NOT TOUCH (FOR CHECKING ONLY)
 /THESIS CHAPTER IV-V.pdf
+__pycache__/
+*.pyc
+.venv/
+*.bak
+processed_datasets/
+results/
