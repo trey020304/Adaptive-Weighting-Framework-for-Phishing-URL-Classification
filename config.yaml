@@ -1,0 +1,110 @@
+# ============================================================
+# Adaptive Hybrid Phishing URL Classification Framework
+# Configuration File
+# ============================================================
+
+# --- Random Seed ---
+random_seed: 42
+
+# --- Dataset Split ---
+# Folder name under processed_datasets/ containing train.csv, val.csv, test.csv; ITO ANG BAGUHIN PAG MAGTTRATIN NG SPECIFIC SPLITS
+split_dir: "train[3,4,7]_val[5,9]_test[1,8]"
+
+# --- Feature Columns ---
+# All 53 lexical features (in order as they appear in the CSVs)
+feature_columns:
+  - num_dots
+  - num_hyphens
+  - num_underscores
+  - num_slashes
+  - num_question_marks
+  - num_equals
+  - num_at
+  - num_ampersand
+  - num_spaces
+  - num_tilde
+  - num_comma
+  - num_star
+  - num_dollar
+  - num_percent
+  - url_length
+  - hostname_length
+  - is_shortened
+  - is_ip
+  - is_brand_in_domain
+  - is_brand_in_subdomain
+  - is_brand_in_path
+  - has_suspicious
+  - has_exe_extension
+  - has_https
+  - has_non_std_port
+  - is_tld_suspicious
+  - is_tld_in_path
+  - is_tld_in_subdomain
+  - has_http_in_path
+  - has_punycode
+  - is_subdomain_abnormal
+  - has_hyphen
+  - is_domain_random
+  - num_double_slash
+  - num_or
+  - num_colon
+  - num_semicolon
+  - num_www
+  - num_com
+  - num_domain_parts
+  - pct_digits_url
+  - pct_digits_host
+  - num_alphanumeric
+  - max_consecutive_chars
+  - shortest_token_url
+  - shortest_token_host
+  - shortest_token_path
+  - longest_token_url
+  - longest_token_host
+  - longest_token_path
+  - avg_token_len_url
+  - avg_token_len_host
+  - avg_token_len_path
+
+label_column: "label"
+positive_label: "Phishing"
+
+# --- Path A: Chi-square + Random Forest ---
+path_a:
+  # Chi-square feature selection: search range for optimal k
+  chi2_k_range: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 53]
+  chi2_cv_folds: 5
+
+  # Random Forest hyperparameters
+  rf_n_estimators: 100
+  rf_class_weight: "balanced"
+
+# --- Path B: CNN-BiLSTM ---
+path_b:
+  # Architecture
+  conv1_filters: 64
+  conv1_kernel: 3
+  conv2_filters: 128
+  conv2_kernel: 5
+
+  bilstm_units: 128   # per direction
+
+  # Training
+  learning_rate: 0.001
+  batch_size: 256
+  max_epochs: 500
+  early_stopping_patience: 50
+
+  # Learning rate search candidates (used in hyperparameter tuning)
+  lr_candidates: [0.0001, 0.001, 0.01]
+
+# --- Adaptive Weighting ---
+adaptive:
+  # Sensitivity coefficient candidates
+  gamma_candidates: [1.0, 2.0, 5.0]
+  # Default gamma (used if not tuning)
+  gamma: 2.0
+
+# --- Output ---
+output_dir: "results"
