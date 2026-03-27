@@ -809,6 +809,111 @@ def run_pipeline(train_entries, val_entries, test_entries,
     print(f"  train={n_train}, val={n_val}, test={n_test}")
 
 
+def run_homogeneous_pipeline(entries, train_ratio=0.70, val_ratio=0.15,
+                             datasets_dir='datasets',
+                             output_dir='processed_datasets',
+                             seed=42):
+    """
+    Homogeneous splitting pipeline: each dataset is independently split
+    into train/val/test (stratified by label), then all train portions are
+    merged, all val portions are merged, all test portions are merged.
+
+    This ensures every split contains samples from every dataset, so
+    feature-label relationships remain consistent across splits.
+    """
+    from sklearn.model_selection import train_test_split
+
+    train_dfs, val_dfs, test_dfs = [], [], []
+
+    print("\nLoading and splitting each dataset (stratified per-dataset):")
+    for entry in entries:
+        df = load_dataset(entry, datasets_dir)
+        labels = df['label']
+
+        # First split: train vs (val+test)
+        val_test_ratio = 1.0 - train_ratio
+        df_train, df_valtest = train_test_split(
+            df, test_size=val_test_ratio, stratify=labels, random_state=seed
+        )
+
+        # Second split: val vs test from the remainder
+        test_frac_of_remainder = (1.0 - train_ratio - val_ratio) / val_test_ratio
+        df_val, df_test = train_test_split(
+            df_valtest, test_size=test_frac_of_remainder,
+            stratify=df_valtest['label'], random_state=seed
+        )
+
+        print(f"    [{entry['display_id']}] train={len(df_train)}, "
+              f"val={len(df_val)}, test={len(df_test)}")
+
+        train_dfs.append(df_train)
+        val_dfs.append(df_val)
+        test_dfs.append(df_test)
+
+    train_df = pd.concat(train_dfs, ignore_index=True)
+    val_df   = pd.concat(val_dfs,   ignore_index=True)
+    test_df  = pd.concat(test_dfs,  ignore_index=True)
+
+    # Shuffle each split
+    train_df = train_df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    val_df   = val_df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    test_df  = test_df.sample(frac=1, random_state=seed).reset_index(drop=True)
+
+    print(f"\n  Merged: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
+
+    # Remove duplicates from training set
+    before = len(train_df)
+    train_df = train_df.drop_duplicates(
+        subset=STANDARD_FEATURES + ['label']
+    ).reset_index(drop=True)
+    removed = before - len(train_df)
+    if removed:
+        print(f"  Duplicate removal: removed {removed} rows from training set "
+              f"({len(train_df)} remaining)")
+
+    # Build output folder
+    ds_ids = ','.join(str(e['display_id']) for e in entries)
+    run_folder = f'homogeneous[{ds_ids}]'
+    run_dir = os.path.join(output_dir, run_folder)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Fit MinMaxScaler on training, apply to all splits
+    scaler = MinMaxScaler()
+    train_scaled = train_df.copy()
+    val_scaled   = val_df.copy()
+    test_scaled  = test_df.copy()
+
+    train_scaled[STANDARD_FEATURES] = scaler.fit_transform(
+        train_df[STANDARD_FEATURES])
+    val_scaled[STANDARD_FEATURES] = scaler.transform(
+        val_df[STANDARD_FEATURES])
+    test_scaled[STANDARD_FEATURES] = scaler.transform(
+        test_df[STANDARD_FEATURES])
+    print(f"\n  MinMaxScaler fit on training set, applied to all splits")
+
+    scaler_path = os.path.join(run_dir, 'scaler.joblib')
+    joblib.dump(scaler, scaler_path)
+    print(f"  Scaler saved to {scaler_path}")
+
+    # Report class distribution
+    for name, split in [('Train', train_scaled), ('Val', val_scaled), ('Test', test_scaled)]:
+        counts = split['label'].value_counts()
+        total = len(split)
+        phish = counts.get('Phishing', 0)
+        print(f"  {name}: {total} rows — "
+              f"Phishing={phish} ({100*phish/total:.1f}%), "
+              f"Not Phishing={total-phish} ({100*(total-phish)/total:.1f}%)")
+
+    # Save scaled CSVs
+    n_train = save_split(train_scaled, 'train', run_dir)
+    n_val   = save_split(val_scaled,   'val',   run_dir)
+    n_test  = save_split(test_scaled,  'test',  run_dir)
+    print(f"\n  Saved to {run_dir}")
+    print(f"  train={n_train}, val={n_val}, test={n_test}")
+
+    return run_folder
+
+
 def parse_ids(text, available):
     """Parse comma-separated display IDs into a list of available entries."""
     ids = [int(x.strip()) for x in text.split(',')]
@@ -839,6 +944,26 @@ def main():
         print(f"  [{ds['display_id']}] {ds['name']}")
     print()
 
+    # ── Homogeneous mode ──
+    # CLI: python preprocess.py --homogeneous 3,5,7,8,9
+    if len(sys.argv) > 1 and sys.argv[1] == '--homogeneous':
+        ids_text = sys.argv[2].strip() if len(sys.argv) > 2 else None
+        if ids_text is None:
+            ids_text = input("Enter dataset IDs to include (comma-separated): ").strip()
+        entries = parse_ids(ids_text, available)
+        if not entries:
+            print("No valid dataset IDs.")
+            return
+        print(f"Homogeneous mode — datasets: {[e['name'] for e in entries]}")
+        try:
+            run_folder = run_homogeneous_pipeline(entries)
+            print(f"\nDone. Set split_dir: \"{run_folder}\" in config.yaml")
+        except Exception as e:
+            print(f"\nError: {e}")
+            raise
+        return
+
+    # ── Cross-dataset mode (original) ──
     # CLI usage: python preprocess.py <train_ids> <val_ids> <test_ids>
     # Example:   python preprocess.py 1,3 2 4
     # Interactive: prompts for each role
@@ -890,6 +1015,416 @@ def main():
         raise
 
     print("\nDone.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Preprocessing functions for external pipelines (Aqilla / Princeton)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def load_config(config_path="config.yaml"):
+    """Load the YAML configuration file."""
+    import yaml
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+# ── Unified dataset loader ────────────────────────────────────────────────────
+
+def load_any_dataset(dataset_id, cfg):
+    """Load any dataset by ID from the registry in config.yaml.
+
+    For 'defined' datasets: reads CSV as-is, normalises URL/label columns.
+    For 'raw' datasets: reads URL + label, extracts 53 standard features.
+
+    Returns a DataFrame with columns: url, <53 standard features>, status
+    where status is 'phishing' or 'legitimate'.
+    """
+    ds_cfg = cfg["datasets"][str(dataset_id)]
+    data_path = ds_cfg["path"]
+    ds_type = ds_cfg["type"]
+    url_col = ds_cfg["url_col"]
+    label_col = ds_cfg["label_col"]
+    phishing_values = ds_cfg["phishing_values"]
+
+    print(f"Loading dataset [{dataset_id}] from {data_path} ...")
+    df = pd.read_csv(data_path)
+    print(f"  Shape: {df.shape}")
+
+    # Drop rows with missing URL or label
+    df = df.dropna(subset=[url_col, label_col])
+
+    # Normalise label → 'phishing' / 'legitimate'
+    raw_labels = df[label_col]
+    # Convert to comparable types (handle int/float/string)
+    phishing_set = set()
+    for v in phishing_values:
+        phishing_set.add(v)
+        if isinstance(v, (int, float)):
+            phishing_set.add(int(v))
+            phishing_set.add(float(v))
+            phishing_set.add(str(int(v)))
+        else:
+            phishing_set.add(str(v).lower())
+
+    def _map_label(val):
+        if val in phishing_set:
+            return "phishing"
+        if isinstance(val, str) and val.lower() in phishing_set:
+            return "phishing"
+        return "legitimate"
+
+    df["status"] = raw_labels.apply(_map_label)
+
+    # Normalise URL column name
+    if url_col != "url":
+        df = df.rename(columns={url_col: "url"})
+
+    # Drop duplicates
+    dupes = df.duplicated().sum()
+    print(f"  Duplicates dropped: {dupes}")
+    df = df.drop_duplicates().reset_index(drop=True)
+
+    print(f"  Label distribution:\n{df['status'].value_counts().to_string()}")
+
+    if ds_type == "defined":
+        # Defined datasets already have feature columns — return as-is
+        print(f"  Type: defined (pre-extracted features)")
+        return df
+
+    # Raw datasets: extract 53 standard features from URLs
+    print(f"  Type: raw — extracting 53 lexical features from URLs ...")
+    features_list = []
+    urls = df["url"].astype(str).values
+    total = len(urls)
+    for i, url in enumerate(urls):
+        if (i + 1) % 10000 == 0 or (i + 1) == total:
+            print(f"    Processed {i + 1}/{total} URLs ...", end="\r")
+        features_list.append(extract_features_from_url(url))
+    print()  # newline after progress
+
+    feat_df = pd.DataFrame(features_list)
+    feat_df["url"] = df["url"].values
+    feat_df["status"] = df["status"].values
+
+    # Reorder: url first, then 53 features, then status
+    cols = ["url"] + STANDARD_FEATURES + ["status"]
+    feat_df = feat_df[cols]
+
+    print(f"  Final shape: {feat_df.shape}")
+    return feat_df
+
+
+# ── Aqilla pipeline preprocessing ─────────────────────────────────────────────
+
+def aqilla_load_and_clean(cfg):
+    """Load dataset via registry, check missing/duplicates, encode labels.
+    Returns (df, feature_cols, X, y, label_encoder).
+    """
+    dataset_id = cfg["aqilla"]["dataset_id"]
+    df = load_any_dataset(dataset_id, cfg)
+
+    # Encode target label
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    df["label"] = le.fit_transform(df["status"])  # legitimate=0, phishing=1
+    print(f"Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    # Missing values
+    missing = df.isnull().sum().sum()
+    print(f"Missing values: {missing}")
+    if missing > 0:
+        df = df.fillna(0)
+
+    # Separate features and target
+    drop_cols = ["url", "status", "label"]
+    feature_cols = [c for c in df.columns if c not in drop_cols]
+    X = df[feature_cols].copy()
+    y = df["label"].copy()
+
+    return df, feature_cols, X, y, le
+
+
+def aqilla_feature_engineering(X):
+    """Create augmented features: domain_age_adequate, is_trusted_domain,
+    similar_to_trusted. Returns modified X."""
+    X = X.copy()
+    if "domain_age" in X.columns:
+        X["domain_age_adequate"] = (X["domain_age"] > 365).astype(int)
+    if {"google_index", "dns_record"}.issubset(X.columns):
+        X["is_trusted_domain"] = (
+            (X["google_index"] == 1) & (X["dns_record"] == 1)
+        ).astype(int)
+    brand_cols = [c for c in ["domain_in_brand", "brand_in_subdomain", "brand_in_path"]
+                  if c in X.columns]
+    if brand_cols:
+        X["similar_to_trusted"] = (X[brand_cols].sum(axis=1) > 0).astype(int)
+    return X
+
+
+def aqilla_feature_selection(X, y, cfg):
+    """Correlation removal + chi-square selection. Returns (X_selected, chi2_df)."""
+    corr_thresh = cfg["aqilla"]["correlation_threshold"]
+    p_thresh = cfg["aqilla"]["chi2_p_threshold"]
+
+    # Correlation analysis
+    corr_matrix = X.corr().abs()
+    upper_tri = corr_matrix.where(
+        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+    )
+    high_corr_cols = [col for col in upper_tri.columns
+                      if any(upper_tri[col] > corr_thresh)]
+    print(f"\nHighly correlated features removed ({len(high_corr_cols)}): {high_corr_cols}")
+    X = X.drop(columns=high_corr_cols)
+
+    # Chi-square test
+    from sklearn.preprocessing import MinMaxScaler
+    from sklearn.feature_selection import chi2
+    scaler_chi = MinMaxScaler()
+    X_chi = pd.DataFrame(scaler_chi.fit_transform(X), columns=X.columns)
+    chi2_scores, p_values = chi2(X_chi, y)
+    chi2_df = pd.DataFrame({
+        "feature": X.columns, "chi2": chi2_scores, "p_value": p_values
+    }).sort_values("chi2", ascending=False)
+
+    sig_features = chi2_df[chi2_df["p_value"] < p_thresh]["feature"].tolist()
+    print(f"Features after chi-square selection (p<{p_thresh}): "
+          f"{len(sig_features)} of {X.shape[1]}")
+    X = X[sig_features]
+    return X, chi2_df
+
+
+def aqilla_normalize(X):
+    """Min-Max normalization then Z-score standardization. Returns (X_final, mm_scaler, z_scaler)."""
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
+    mm_scaler = MinMaxScaler()
+    X_scaled = mm_scaler.fit_transform(X)
+    z_scaler = StandardScaler()
+    X_scaled = z_scaler.fit_transform(X_scaled)
+    X_final = pd.DataFrame(X_scaled, columns=X.columns)
+    return X_final, mm_scaler, z_scaler
+
+
+def aqilla_pca(X_final, cfg):
+    """PCA dimensionality reduction. Returns (X_pca, pca_model)."""
+    from sklearn.decomposition import PCA
+    seed = cfg["random_seed"]
+    variance = cfg["aqilla"]["pca_variance_retained"]
+    pca = PCA(n_components=variance, random_state=seed)
+    X_pca = pca.fit_transform(X_final)
+    print(f"PCA components ({variance*100:.0f}% variance): {pca.n_components_}")
+    return X_pca, pca
+
+
+def aqilla_preprocess(cfg):
+    """Full Aqilla preprocessing pipeline. Returns dict with all needed objects."""
+    df, feature_cols, X, y, le = aqilla_load_and_clean(cfg)
+
+    print(f"\nFeature matrix shape before selection: {X.shape}")
+    X = aqilla_feature_engineering(X)
+    print(f"Feature matrix shape after augmentation: {X.shape}")
+
+    X, chi2_df = aqilla_feature_selection(X, y, cfg)
+    print(f"Feature matrix shape after selection: {X.shape}")
+
+    X_final, mm_scaler, z_scaler = aqilla_normalize(X)
+    print(f"\nFinal feature matrix shape: {X_final.shape}")
+
+    return {
+        "X_final": X_final,
+        "y": y,
+        "le": le,
+        "chi2_df": chi2_df,
+        "feature_names": X.columns.tolist(),
+        "mm_scaler": mm_scaler,
+        "z_scaler": z_scaler,
+    }
+
+
+# ── Princeton pipeline preprocessing (char-level URL) ─────────────────────────
+
+def _build_char_vocab(urls_clean):
+    """Build character vocabulary from cleaned URL list."""
+    chars = sorted(set("".join(urls_clean)))
+    char_to_idx = {c: i + 1 for i, c in enumerate(chars)}  # 0 = padding
+    vocab_size = len(char_to_idx) + 1
+    return char_to_idx, vocab_size
+
+
+def _encode_url_chars(url, mapping, maxlen):
+    """Encode a single URL string to a fixed-length integer sequence."""
+    encoded = [mapping.get(c, 0) for c in url[:maxlen]]
+    if len(encoded) < maxlen:
+        encoded += [0] * (maxlen - len(encoded))
+    return encoded
+
+
+def princeton_preprocess(cfg):
+    """Full Princeton (original) preprocessing. Returns dict."""
+    pcfg = cfg["princeton"]
+    seed = cfg["random_seed"]
+    data_path = pcfg["dataset_path"]
+    max_len = pcfg["char_max_len"]
+
+    df = pd.read_csv(data_path)
+    df = df.drop_duplicates().reset_index(drop=True)
+    print(f"Loading dataset from {data_path} ...")
+    print(f"  Shape: {df.shape}")
+    print(f"  Label distribution:\n{df['status'].value_counts().to_string()}\n")
+
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    labels = le.fit_transform(df["status"])
+    print(f"Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    # Char-level encoding
+    print("\nPreprocessing URLs (character-level tokenization) ...")
+    urls = df["url"].astype(str).values
+    urls_clean = [u.lower().strip() for u in urls]
+
+    char_to_idx, vocab_size = _build_char_vocab(urls_clean)
+    print(f"  Vocabulary size (unique chars): {vocab_size}")
+    print(f"  Max sequence length: {max_len}")
+
+    X_encoded = np.array([_encode_url_chars(u, char_to_idx, max_len)
+                          for u in urls_clean])
+    y = np.array(labels, dtype=np.float32)
+    print(f"  Encoded shape: {X_encoded.shape}")
+
+    # Train / val / test split
+    from sklearn.model_selection import train_test_split
+    test_size = pcfg["test_size"]
+    val_size = pcfg["val_size"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_encoded, y, test_size=test_size, random_state=seed, stratify=y
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train, y_train, test_size=val_size, random_state=seed, stratify=y_train
+    )
+
+    print(f"\n  Train : {X_train.shape[0]}")
+    print(f"  Val   : {X_val.shape[0]}")
+    print(f"  Test  : {X_test.shape[0]}")
+
+    return {
+        "X_train": X_train, "X_val": X_val, "X_test": X_test,
+        "y_train": y_train, "y_val": y_val, "y_test": y_test,
+        "le": le,
+        "vocab_size": vocab_size,
+        "char_to_idx": char_to_idx,
+    }
+
+
+# ── Princeton improved preprocessing (char + token + tabular) ─────────────────
+
+def _build_token_vocab(urls_clean, min_freq):
+    """Tokenize URLs by delimiters, build vocab with min frequency."""
+    import re
+    all_tokens_list = [re.split(r'[/:?=&@.\-_~#%]+', u) for u in urls_clean]
+
+    token_freq = {}
+    for tokens in all_tokens_list:
+        for t in tokens:
+            if t:
+                token_freq[t] = token_freq.get(t, 0) + 1
+
+    token_vocab = {t: i + 1 for i, (t, freq) in enumerate(
+        sorted(token_freq.items(), key=lambda x: -x[1])
+    ) if freq >= min_freq}
+    token_vocab_size = len(token_vocab) + 1
+    return all_tokens_list, token_vocab, token_vocab_size
+
+
+def _encode_url_tokens(tokens, mapping, maxlen):
+    """Encode token list to fixed-length integer sequence."""
+    encoded = [mapping.get(t, 0) for t in tokens[:maxlen] if t]
+    if len(encoded) < maxlen:
+        encoded += [0] * (maxlen - len(encoded))
+    return encoded[:maxlen]
+
+
+def princeton_improved_preprocess(cfg):
+    """Full Princeton improved preprocessing. Returns dict with 3 input branches."""
+    pcfg = cfg["princeton_improved"]
+    seed = cfg["random_seed"]
+    dataset_id = pcfg["dataset_id"]
+
+    df = load_any_dataset(dataset_id, cfg)
+
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    labels = le.fit_transform(df["status"])
+    print(f"Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    urls = df["url"].astype(str).values
+    urls_clean = [u.lower().strip() for u in urls]
+
+    # ── Char-level ──
+    char_max_len = pcfg["char_max_len"]
+    print("\n── Preparing char-level URL input ──")
+    char_to_idx, char_vocab_size = _build_char_vocab(urls_clean)
+    print(f"  Vocab size: {char_vocab_size}, Max seq len: {char_max_len}")
+    X_char = np.array([_encode_url_chars(u, char_to_idx, char_max_len)
+                        for u in urls_clean])
+    print(f"  Char-encoded shape: {X_char.shape}")
+
+    # ── Token-level ──
+    token_max_len = pcfg["token_max_len"]
+    token_min_freq = pcfg["token_min_freq"]
+    print("\n── Preparing token-level URL input ──")
+    all_tokens_list, token_vocab, token_vocab_size = _build_token_vocab(
+        urls_clean, token_min_freq
+    )
+    print(f"  Token vocab size: {token_vocab_size}, Max tokens: {token_max_len}")
+    X_token = np.array([_encode_url_tokens(toks, token_vocab, token_max_len)
+                         for toks in all_tokens_list])
+    print(f"  Token-encoded shape: {X_token.shape}")
+
+    # ── Tabular numeric features ──
+    print("\n── Preparing tabular numeric features ──")
+    drop_cols = ["url", "status"]
+    feature_cols = [c for c in df.columns if c not in drop_cols]
+    X_tab = df[feature_cols].values.astype(np.float32)
+    X_tab = np.nan_to_num(X_tab, nan=0.0)
+    from sklearn.preprocessing import MinMaxScaler
+    tab_scaler = MinMaxScaler()
+    X_tab = tab_scaler.fit_transform(X_tab)
+    num_features = X_tab.shape[1]
+    print(f"  Tabular features: {num_features}")
+
+    y = np.array(labels, dtype=np.float32)
+
+    # ── Split using indices (keeps all arrays aligned) ──
+    from sklearn.model_selection import train_test_split
+    test_size = pcfg["test_size"]
+    val_size = pcfg["val_size"]
+
+    idx = np.arange(len(y))
+    idx_train, idx_test, y_train, y_test = train_test_split(
+        idx, y, test_size=test_size, random_state=seed, stratify=y
+    )
+    idx_train, idx_val, y_train, y_val = train_test_split(
+        idx_train, y_train, test_size=val_size, random_state=seed, stratify=y_train
+    )
+
+    print(f"\n  Train: {len(idx_train)}  |  Val: {len(idx_val)}  |  Test: {len(idx_test)}")
+
+    return {
+        "X_char_train": X_char[idx_train], "X_char_val": X_char[idx_val],
+        "X_char_test": X_char[idx_test],
+        "X_token_train": X_token[idx_train], "X_token_val": X_token[idx_val],
+        "X_token_test": X_token[idx_test],
+        "X_tab_train": X_tab[idx_train], "X_tab_val": X_tab[idx_val],
+        "X_tab_test": X_tab[idx_test],
+        "y_train": y_train, "y_val": y_val, "y_test": y_test,
+        "le": le,
+        "char_vocab_size": char_vocab_size,
+        "token_vocab_size": token_vocab_size,
+        "num_tab_features": num_features,
+        "char_to_idx": char_to_idx,
+        "token_vocab": token_vocab,
+        "tab_scaler": tab_scaler,
+    }
 
 
 if __name__ == '__main__':

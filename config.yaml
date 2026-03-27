@@ -8,7 +8,7 @@ random_seed: 42
 
 # --- Dataset Split ---
 # Folder name under processed_datasets/ containing train.csv, val.csv, test.csv; ITO ANG BAGUHIN PAG MAGTTRATIN NG SPECIFIC SPLITS
-split_dir: "train[3,4,7]_val[5,9]_test[1,8]"
+split_dir: "homogeneous[3,5,7,8,9]"
 
 # --- Feature Columns ---
 # All 53 lexical features (in order as they appear in the CSVs)
@@ -72,12 +72,17 @@ positive_label: "Phishing"
 
 # --- Path A: Chi-square + Random Forest ---
 path_a:
-  # Chi-square feature selection: search range for optimal k
-  chi2_k_range: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 53]
-  chi2_cv_folds: 5
+  # Stability-weighted chi-square: penalty for distribution shift
+  # adjusted_chi2_i = chi2_i / (1 + shift_penalty * |mean_train_i - mean_val_i|)
+  shift_penalty: 10.0
+
+  # Chi-square feature selection: search range for optimal k (fine granularity)
+  chi2_k_range: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 25, 30, 35, 40, 45, 50, 53]
 
   # Random Forest hyperparameters
-  rf_n_estimators: 100
+  rf_n_estimators: 300
+  rf_max_depth: 30
+  rf_min_samples_leaf: 5
   rf_class_weight: "balanced"
 
 # --- Path B: CNN-BiLSTM ---
@@ -101,6 +106,9 @@ path_b:
 
 # --- Adaptive Weighting ---
 adaptive:
+  dataset_id: "3"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
+  test_size: 0.20       # must match both paths for aligned splits
+  val_size: 0.15        # must match both paths for aligned splits
   # Sensitivity coefficient candidates
   gamma_candidates: [1.0, 2.0, 5.0]
   # Default gamma (used if not tuning)
@@ -108,3 +116,136 @@ adaptive:
 
 # --- Output ---
 output_dir: "results"
+
+# ============================================================
+# Dataset Registry
+# ============================================================
+# Each entry: path, url_col, label_col, phishing_values (label values that mean phishing)
+# type: "defined" = already has pre-extracted features; "raw" = URL + label only
+datasets:
+  "3":
+    path: "datasets/defined/[3] dataset_phishing_kaggle_Shashwat Tiwari (50-50).csv"
+    type: "defined"
+    url_col: "url"
+    label_col: "status"
+    phishing_values: ["phishing"]
+  "6":
+    path: "datasets/defined/[6] dataset_B_05_2020_Mendeley_Hannousse (50-50).csv"
+    type: "defined"
+    url_col: "url"
+    label_col: "status"
+    phishing_values: ["phishing"]
+  "7":
+    path: "datasets/raw/[7] phishing_site_urls - kaggle (P28% NP72%).csv"
+    type: "raw"
+    url_col: "URL"
+    label_col: "Label"
+    phishing_values: ["bad"]
+  "8":
+    path: "datasets/raw/[8] phishing_simple (1) - kaggle (P43% NP57%).csv"
+    type: "raw"
+    url_col: "URL"
+    label_col: "label"
+    phishing_values: ["phishing"]
+  "9":
+    path: "datasets/raw/[9] url_features_extracted1 - mendeley (P37% NP63%).csv"
+    type: "raw"
+    url_col: "URL"
+    label_col: "ClassLabel"
+    phishing_values: [1, 1.0]
+  "10":
+    path: "datasets/raw/[10] PhiUSIIL_Phishing_URL_Dataset (P57% NP43%).csv"
+    type: "raw"
+    url_col: "URL"
+    label_col: "label"
+    phishing_values: [1]
+  "11":
+    path: "datasets/raw/[11] new_data_urls - kaggle (P52% 49%).csv"
+    type: "raw"
+    url_col: "url"
+    label_col: "status"
+    phishing_values: [1]
+  "12":
+    path: "datasets/raw/[12] URL dataset (P23% NP77%).csv"
+    type: "raw"
+    url_col: "url"
+    label_col: "type"
+    phishing_values: ["phishing"]
+  "c1":
+    path: "datasets/raw/[c1] index - mendeley (P37.5% NP62.5%).csv"
+    type: "raw"
+    url_col: "url"
+    label_col: "result"
+    phishing_values: [1]
+
+# ============================================================
+# Aqilla Pipeline — Random Forest (Khairunnisya 2025)
+# ============================================================
+aqilla:
+  dataset_id: "3"      # key from the datasets registry above
+
+  # Preprocessing
+  correlation_threshold: 0.95       # |r| above this → drop feature
+  chi2_p_threshold: 0.05            # p-value below this → keep feature
+
+  # Train/val/test split
+  test_size: 0.20
+  val_size: 0.15
+
+  # GridSearchCV
+  cv_folds: 5
+
+  # Random Forest hyperparameter grid
+  rf:
+    n_estimators: [100, 200, 300]
+    max_depth: [10, 20, null]       # null = None (unlimited)
+    min_samples_split: [2, 5]
+
+# ============================================================
+# Princeton Improved — Hybrid CNN-BiLSTM (dual-input)
+# ============================================================
+princeton_improved:
+  dataset_id: "3"      # key from the datasets registry above
+
+  # URL character-level encoding
+  char_max_len: 300
+  char_embedding_dim: 256
+
+  # URL token-level encoding
+  token_max_len: 30
+  token_min_freq: 2
+  token_embedding_dim: 64
+
+  # Train/test/val split
+  test_size: 0.20
+  val_size: 0.15
+
+  # Char branch (CNN-BiLSTM)
+  char_conv1_filters: 128
+  char_conv1_kernel: 3
+  char_conv2_filters: 64
+  char_conv2_kernel: 3
+  char_bilstm_units: 64
+
+  # Token branch (BiLSTM)
+  token_bilstm_units: 32
+
+  # Tabular branch
+  tab_dense1_units: 128
+  tab_dense2_units: 64
+
+  # Merge head
+  merge_dense1_units: 128
+  merge_dense2_units: 64
+
+  # Common
+  dropout_rate: 0.2
+
+  # Training
+  learning_rate: 0.001
+  batch_size: 32
+  max_epochs: 50
+  early_stopping_patience: 8
+  reduce_lr_patience: 4
+  reduce_lr_factor: 0.5
+  reduce_lr_min: 0.000001

@@ -2,28 +2,30 @@
 Adaptive Hybrid Phishing URL Classification Framework
 ======================================================
 Orchestrates:
-  1. Path A (Chi-square + Random Forest)
-  2. Path B (CNN-BiLSTM)
+  1. Path A (Chi-square + Random Forest)  — from path_a_baseline
+  2. Path B (Hybrid CNN-BiLSTM)           — from path_b_baseline
   3. Exponential loss-weighted adaptive gating
   4. Full evaluation and comparison
+
+Weighting equation (per epoch t):
+    alpha(t) = exp(-gamma * L_A) / (exp(-gamma * L_A) + exp(-gamma * L_B(t)))
+    beta(t)  = 1 - alpha(t)
+    P_final  = alpha(t) * P_A(x) + beta(t) * P_B(x)
 """
 
 import os
 import sys
 import json
-import time
-import yaml
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, roc_auc_score, log_loss, confusion_matrix
 )
-from scipy import stats
 
-from path_a import load_config, train_path_a
-from path_b import train_path_b
+from preprocess import load_config
+from path_a_baseline import train_path_a
+from path_b_baseline import train_path_b
 
 
 # ------------------------------------------------------------------ #
@@ -111,18 +113,33 @@ def select_gamma(P_A_val, P_B_val, y_val, L_A, epoch_L_B, candidates):
 # ------------------------------------------------------------------ #
 
 def run_hybrid(cfg):
-    out_dir = os.path.join(cfg["output_dir"], cfg["split_dir"])
+    # ── Override both pipeline dataset_ids with the adaptive dataset_id ──
+    adaptive_cfg = cfg["adaptive"]
+    adaptive_ds = adaptive_cfg.get("dataset_id")
+
+    if adaptive_ds:
+        cfg["aqilla"]["dataset_id"] = adaptive_ds
+        cfg["princeton_improved"]["dataset_id"] = adaptive_ds
+        # Ensure both paths use identical split ratios
+        if "test_size" in adaptive_cfg:
+            cfg["aqilla"]["test_size"] = adaptive_cfg["test_size"]
+            cfg["princeton_improved"]["test_size"] = adaptive_cfg["test_size"]
+        if "val_size" in adaptive_cfg:
+            cfg["aqilla"]["val_size"] = adaptive_cfg["val_size"]
+            cfg["princeton_improved"]["val_size"] = adaptive_cfg["val_size"]
+
+    out_dir = os.path.join("results", "adaptive_hybrid", f"dataset_{adaptive_ds or 'default'}")
     os.makedirs(out_dir, exist_ok=True)
 
-    # ---- Path A ----
+    # ---- Path A: Chi-square + Random Forest ----
     print("=" * 60)
     print("  PATH A: Chi-square + Random Forest")
     print("=" * 60)
     res_a = train_path_a(cfg)
 
-    # ---- Path B ----
+    # ---- Path B: Hybrid CNN-BiLSTM ----
     print("\n" + "=" * 60)
-    print("  PATH B: CNN-BiLSTM")
+    print("  PATH B: Hybrid CNN-BiLSTM")
     print("=" * 60)
     res_b = train_path_b(cfg)
 
@@ -134,7 +151,7 @@ def run_hybrid(cfg):
     L_A = res_a["val_loss"]
     epoch_L_B = res_b["epoch_val_losses"]
 
-    gamma_candidates = cfg["adaptive"]["gamma_candidates"]
+    gamma_candidates = adaptive_cfg["gamma_candidates"]
     print("\nSelecting gamma on validation set:")
     gamma = select_gamma(
         res_a["val_proba"], res_b["val_proba"], res_a["y_val"],
@@ -164,24 +181,27 @@ def run_hybrid(cfg):
 
     # ---- Computational Metrics ----
     print("\n--- Computational Metrics ---")
+    path_b_best = res_b["metrics"].get("best_epoch")
+    path_b_total = res_b["metrics"].get("total_epochs")
     comp = {
         "path_a_train_time_s": res_a["train_time"],
         "path_b_train_time_s": res_b["train_time"],
-        "path_b_best_epoch": res_b["metrics"].get("best_epoch"),
-        "path_b_total_epochs": res_b["metrics"].get("total_epochs"),
         "path_a_inference_ms": res_a["metrics"]["inference_ms_per_sample"],
         "path_b_inference_ms": res_b["metrics"]["inference_ms_per_sample"],
+        "path_a_model_size_mb": res_a["metrics"].get("model_size_mb"),
+        "path_b_model_size_mb": res_b["metrics"].get("model_size_mb"),
+        "path_b_best_epoch": path_b_best,
+        "path_b_total_epochs": path_b_total,
+        "path_b_convergence_rate": round(path_b_best / path_b_total, 4) if path_b_best and path_b_total else None,
     }
-    if "model_size_mb" in res_b["metrics"]:
-        comp["path_b_model_size_mb"] = res_b["metrics"]["model_size_mb"]
-
-    # Path A model size
-    rf_path = os.path.join(out_dir, "random_forest.joblib")
-    if os.path.exists(rf_path):
-        comp["path_a_model_size_mb"] = os.path.getsize(rf_path) / (1024 * 1024)
 
     for k, v in comp.items():
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+        if v is None:
+            print(f"  {k}: N/A")
+        elif isinstance(v, float):
+            print(f"  {k}: {v:.4f}")
+        else:
+            print(f"  {k}: {v}")
 
     # ---- Comparison Table ----
     print("\n" + "=" * 60)
@@ -200,7 +220,7 @@ def run_hybrid(cfg):
         )
         print(row)
 
-    # ---- Statistical Significance (bootstrap) ----
+    # ---- Statistical Significance (bootstrap paired test) ----
     print("\n--- Statistical Significance (bootstrap paired test) ---")
     n_bootstrap = 1000
     rng = np.random.RandomState(cfg["random_seed"])
@@ -226,7 +246,7 @@ def run_hybrid(cfg):
     # ---- Save results ----
     report = {
         "config": {
-            "split_dir": cfg["split_dir"],
+            "dataset_id": adaptive_ds,
             "gamma": gamma,
             "optimal_k": res_a["optimal_k"],
             "selected_features": res_a["selected_features"],
