@@ -16,6 +16,8 @@ Weighting equation (per epoch t):
 import os
 import sys
 import json
+import time
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -183,16 +185,43 @@ def run_hybrid(cfg):
     print("\n--- Computational Metrics ---")
     path_b_best = res_b["metrics"].get("best_epoch")
     path_b_total = res_b["metrics"].get("total_epochs")
+
+    # Adaptive hybrid's own inference time: time to combine P_A + P_B
+    n_test = len(y_test)
+    inf_start = time.time()
+    for _ in range(100):
+        _ = alpha * res_a["test_proba"] + beta * res_b["test_proba"]
+    hybrid_inference_per_run = (time.time() - inf_start) / 100
+    # Total hybrid inference = Path A inference + Path B inference + weighting
+    hybrid_inference_ms = (
+        res_a["metrics"]["inference_ms_per_sample"]
+        + res_b["metrics"]["inference_ms_per_sample"]
+        + (hybrid_inference_per_run / n_test) * 1000
+    )
+
+    # Adaptive hybrid total training time = Path A + Path B training
+    hybrid_train_time = res_a["train_time"] + res_b["train_time"]
+
+    # Adaptive hybrid model size = Path A + Path B models combined
+    path_a_size = res_a["metrics"].get("model_size_mb", 0) or 0
+    path_b_size = res_b["metrics"].get("model_size_mb", 0) or 0
+    hybrid_model_size = path_a_size + path_b_size
+
     comp = {
         "path_a_train_time_s": res_a["train_time"],
         "path_b_train_time_s": res_b["train_time"],
+        "adaptive_train_time_s": hybrid_train_time,
         "path_a_inference_ms": res_a["metrics"]["inference_ms_per_sample"],
         "path_b_inference_ms": res_b["metrics"]["inference_ms_per_sample"],
-        "path_a_model_size_mb": res_a["metrics"].get("model_size_mb"),
-        "path_b_model_size_mb": res_b["metrics"].get("model_size_mb"),
+        "adaptive_inference_ms": hybrid_inference_ms,
+        "path_a_model_size_mb": path_a_size,
+        "path_b_model_size_mb": path_b_size,
+        "adaptive_model_size_mb": hybrid_model_size,
         "path_b_best_epoch": path_b_best,
         "path_b_total_epochs": path_b_total,
         "path_b_convergence_rate": round(path_b_best / path_b_total, 4) if path_b_best and path_b_total else None,
+        "adaptive_best_epoch": best_ep,
+        "adaptive_convergence_rate": round(best_ep / path_b_total, 4) if path_b_total else None,
     }
 
     for k, v in comp.items():
@@ -265,6 +294,38 @@ def run_hybrid(cfg):
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2, default=str)
     print(f"\nFull results saved to {report_path}")
+
+    # ---- Save checkpoint (validated classifier) ----
+    ckpt_dir = os.path.join(out_dir, "checkpoint")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    # Path A model + preprocessing
+    joblib.dump(res_a["model"], os.path.join(ckpt_dir, "path_a_rf.joblib"))
+    joblib.dump(res_a["selected_features"], os.path.join(ckpt_dir, "path_a_features.joblib"))
+    joblib.dump(res_a["mm_scaler"], os.path.join(ckpt_dir, "path_a_mm_scaler.joblib"))
+    joblib.dump(res_a["z_scaler"], os.path.join(ckpt_dir, "path_a_z_scaler.joblib"))
+    joblib.dump(res_a["le"], os.path.join(ckpt_dir, "label_encoder.joblib"))
+
+    # Path B model + preprocessing
+    res_b["model"].save(os.path.join(ckpt_dir, "path_b_cnn_bilstm.keras"))
+    joblib.dump(res_b["char_to_idx"], os.path.join(ckpt_dir, "path_b_char_to_idx.joblib"))
+    joblib.dump(res_b["token_vocab"], os.path.join(ckpt_dir, "path_b_token_vocab.joblib"))
+    joblib.dump(res_b["tab_scaler"], os.path.join(ckpt_dir, "path_b_tab_scaler.joblib"))
+
+    # Adaptive weights
+    adaptive_state = {
+        "gamma": gamma,
+        "alpha": alpha,
+        "beta": beta,
+        "best_epoch": best_ep,
+    }
+    joblib.dump(adaptive_state, os.path.join(ckpt_dir, "adaptive_weights.joblib"))
+
+    print(f"Checkpoint saved to {ckpt_dir}/")
+    print(f"  Path A: path_a_rf.joblib, path_a_features.joblib, path_a_mm_scaler.joblib, path_a_z_scaler.joblib")
+    print(f"  Path B: path_b_cnn_bilstm.keras, path_b_char_to_idx.joblib, path_b_token_vocab.joblib, path_b_tab_scaler.joblib")
+    print(f"  Adaptive: adaptive_weights.joblib (gamma={gamma}, alpha={alpha:.4f}, beta={beta:.4f})")
+    print(f"  Labels: label_encoder.joblib")
 
     return report
 

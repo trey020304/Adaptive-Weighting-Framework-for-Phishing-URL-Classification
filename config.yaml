@@ -6,10 +6,6 @@
 # --- Random Seed ---
 random_seed: 42
 
-# --- Dataset Split ---
-# Folder name under processed_datasets/ containing train.csv, val.csv, test.csv; ITO ANG BAGUHIN PAG MAGTTRATIN NG SPECIFIC SPLITS
-split_dir: "homogeneous[3,5,7,8,9]"
-
 # --- Feature Columns ---
 # All 53 lexical features (in order as they appear in the CSVs)
 feature_columns:
@@ -106,7 +102,7 @@ path_b:
 
 # --- Adaptive Weighting ---
 adaptive:
-  dataset_id: "3"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
+  dataset_id: "7"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
   test_size: 0.20       # must match both paths for aligned splits
   val_size: 0.15        # must match both paths for aligned splits
   # Sensitivity coefficient candidates

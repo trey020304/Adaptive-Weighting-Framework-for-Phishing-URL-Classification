@@ -110,6 +110,10 @@ def train_path_b(cfg):
     TOKEN_VOCAB_SIZE = data["token_vocab_size"]
     NUM_FEATURES     = data["num_tab_features"]
 
+    char_to_idx  = data["char_to_idx"]
+    token_vocab  = data["token_vocab"]
+    tab_scaler   = data["tab_scaler"]
+
     MAX_LEN    = icfg["char_max_len"]
     MAX_TOKENS = icfg["token_max_len"]
     DROPOUT    = icfg["dropout_rate"]
@@ -334,6 +338,10 @@ def train_path_b(cfg):
         "train_time": train_time,
         "metrics": metrics,
         "history": history.history,
+        "le": le,
+        "char_to_idx": char_to_idx,
+        "token_vocab": token_vocab,
+        "tab_scaler": tab_scaler,
     }
 
 

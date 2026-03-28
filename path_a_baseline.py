@@ -52,6 +52,8 @@ def train_path_a(cfg):
     le = data["le"]
     chi2_df = data["chi2_df"]
     feature_names = data["feature_names"]
+    mm_scaler = data["mm_scaler"]
+    z_scaler = data["z_scaler"]
 
     # ── 2. Train / Val / Test split ──
     print("\n" + "=" * 60)
@@ -212,6 +214,9 @@ def train_path_a(cfg):
         "y_test": y_test,
         "train_time": train_time,
         "metrics": metrics,
+        "le": le,
+        "mm_scaler": mm_scaler,
+        "z_scaler": z_scaler,
     }
 
 
