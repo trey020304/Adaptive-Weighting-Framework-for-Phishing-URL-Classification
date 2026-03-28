@@ -102,7 +102,7 @@ path_b:
 
 # --- Adaptive Weighting ---
 adaptive:
-  dataset_id: "7"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
+  dataset_id: "9"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
   test_size: 0.20       # must match both paths for aligned splits
   val_size: 0.15        # must match both paths for aligned splits
   # Sensitivity coefficient candidates
@@ -148,19 +148,19 @@ datasets:
     type: "raw"
     url_col: "URL"
     label_col: "ClassLabel"
-    phishing_values: [1, 1.0]
+    phishing_values: [0, 0.0]
   "10":
     path: "datasets/raw/[10] PhiUSIIL_Phishing_URL_Dataset (P57% NP43%).csv"
     type: "raw"
     url_col: "URL"
     label_col: "label"
-    phishing_values: [1]
+    phishing_values: [0]
   "11":
     path: "datasets/raw/[11] new_data_urls - kaggle (P52% 49%).csv"
     type: "raw"
     url_col: "url"
     label_col: "status"
-    phishing_values: [1]
+    phishing_values: [0]
   "12":
     path: "datasets/raw/[12] URL dataset (P23% NP77%).csv"
     type: "raw"

@@ -312,6 +312,9 @@ def run_hybrid(cfg):
     joblib.dump(res_b["token_vocab"], os.path.join(ckpt_dir, "path_b_token_vocab.joblib"))
     joblib.dump(res_b["tab_scaler"], os.path.join(ckpt_dir, "path_b_tab_scaler.joblib"))
 
+    # Path B tabular feature column names (needed for inference column ordering)
+    joblib.dump(res_b["tab_feature_cols"], os.path.join(ckpt_dir, "path_b_tab_features.joblib"))
+
     # Adaptive weights
     adaptive_state = {
         "gamma": gamma,

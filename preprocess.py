@@ -1424,6 +1424,7 @@ def princeton_improved_preprocess(cfg):
         "char_to_idx": char_to_idx,
         "token_vocab": token_vocab,
         "tab_scaler": tab_scaler,
+        "tab_feature_cols": feature_cols,
     }
 
 

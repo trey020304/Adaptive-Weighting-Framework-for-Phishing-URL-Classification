@@ -113,6 +113,7 @@ def train_path_b(cfg):
     char_to_idx  = data["char_to_idx"]
     token_vocab  = data["token_vocab"]
     tab_scaler   = data["tab_scaler"]
+    tab_feature_cols = data["tab_feature_cols"]
 
     MAX_LEN    = icfg["char_max_len"]
     MAX_TOKENS = icfg["token_max_len"]
@@ -342,6 +343,7 @@ def train_path_b(cfg):
         "char_to_idx": char_to_idx,
         "token_vocab": token_vocab,
         "tab_scaler": tab_scaler,
+        "tab_feature_cols": tab_feature_cols,
     }
 
 
