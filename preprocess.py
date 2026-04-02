@@ -1204,17 +1204,6 @@ def aqilla_normalize(X):
     return X_final, mm_scaler, z_scaler
 
 
-def aqilla_pca(X_final, cfg):
-    """PCA dimensionality reduction. Returns (X_pca, pca_model)."""
-    from sklearn.decomposition import PCA
-    seed = cfg["random_seed"]
-    variance = cfg["aqilla"]["pca_variance_retained"]
-    pca = PCA(n_components=variance, random_state=seed)
-    X_pca = pca.fit_transform(X_final)
-    print(f"PCA components ({variance*100:.0f}% variance): {pca.n_components_}")
-    return X_pca, pca
-
-
 def aqilla_preprocess(cfg):
     """Full Aqilla preprocessing pipeline. Returns dict with all needed objects."""
     df, feature_cols, X, y, le = aqilla_load_and_clean(cfg)
@@ -1240,7 +1229,7 @@ def aqilla_preprocess(cfg):
     }
 
 
-# ── Princeton pipeline preprocessing (char-level URL) ─────────────────────────
+# ── Princeton pipeline preprocessing helpers ──────────────────────────────────
 
 def _build_char_vocab(urls_clean):
     """Build character vocabulary from cleaned URL list."""
@@ -1258,61 +1247,16 @@ def _encode_url_chars(url, mapping, maxlen):
     return encoded
 
 
-def princeton_preprocess(cfg):
-    """Full Princeton (original) preprocessing. Returns dict."""
-    pcfg = cfg["princeton"]
-    seed = cfg["random_seed"]
-    data_path = pcfg["dataset_path"]
-    max_len = pcfg["char_max_len"]
+def _encode_url_chars_front_pad(url, mapping, maxlen):
+    """Encode URL to fixed-length integer sequence with front zero-padding.
 
-    df = pd.read_csv(data_path)
-    df = df.drop_duplicates().reset_index(drop=True)
-    print(f"Loading dataset from {data_path} ...")
-    print(f"  Shape: {df.shape}")
-    print(f"  Label distribution:\n{df['status'].value_counts().to_string()}\n")
-
-    from sklearn.preprocessing import LabelEncoder
-    le = LabelEncoder()
-    labels = le.fit_transform(df["status"])
-    print(f"Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
-
-    # Char-level encoding
-    print("\nPreprocessing URLs (character-level tokenization) ...")
-    urls = df["url"].astype(str).values
-    urls_clean = [u.lower().strip() for u in urls]
-
-    char_to_idx, vocab_size = _build_char_vocab(urls_clean)
-    print(f"  Vocabulary size (unique chars): {vocab_size}")
-    print(f"  Max sequence length: {max_len}")
-
-    X_encoded = np.array([_encode_url_chars(u, char_to_idx, max_len)
-                          for u in urls_clean])
-    y = np.array(labels, dtype=np.float32)
-    print(f"  Encoded shape: {X_encoded.shape}")
-
-    # Train / val / test split
-    from sklearn.model_selection import train_test_split
-    test_size = pcfg["test_size"]
-    val_size = pcfg["val_size"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_encoded, y, test_size=test_size, random_state=seed, stratify=y
-    )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=val_size, random_state=seed, stratify=y_train
-    )
-
-    print(f"\n  Train : {X_train.shape[0]}")
-    print(f"  Val   : {X_val.shape[0]}")
-    print(f"  Test  : {X_test.shape[0]}")
-
-    return {
-        "X_train": X_train, "X_val": X_val, "X_test": X_test,
-        "y_train": y_train, "y_val": y_val, "y_test": y_test,
-        "le": le,
-        "vocab_size": vocab_size,
-        "char_to_idx": char_to_idx,
-    }
+    Per Yuan et al. (2019): capture the first `maxlen` characters; if shorter,
+    "interpolated with zero in front of characters".
+    """
+    encoded = [mapping.get(c, 0) for c in url[:maxlen]]
+    if len(encoded) < maxlen:
+        encoded = [0] * (maxlen - len(encoded)) + encoded
+    return encoded
 
 
 # ── Princeton improved preprocessing (char + token + tabular) ─────────────────
@@ -1425,6 +1369,212 @@ def princeton_improved_preprocess(cfg):
         "token_vocab": token_vocab,
         "tab_scaler": tab_scaler,
         "tab_feature_cols": feature_cols,
+    }
+
+
+# ── ODAE-WPDC pipeline preprocessing ─────────────────────────────────────────
+
+def odae_wpdc_preprocess(cfg):
+    """Full ODAE-WPDC preprocessing pipeline.
+
+    Steps (following the paper):
+      1. Load dataset via registry
+      2. Remove missing/null values
+      3. Encode labels
+      4. Apply MinMax scaling to features
+      5. Return scaled features, labels, and metadata
+
+    Feature selection (AAA) and hyperparameter tuning (IWO) are handled
+    in the training pipeline, not here.
+
+    Returns dict with: X, y, feature_names, le, scaler
+    """
+    ocfg = cfg["odae_wpdc"]
+    dataset_id = ocfg["dataset_id"]
+
+    df = load_any_dataset(dataset_id, cfg)
+
+    # ── Remove missing / null values (paper Section 3.1) ──
+    before = len(df)
+    drop_cols = ["url", "status"]
+    feature_cols = [c for c in df.columns if c not in drop_cols]
+    df = df.dropna(subset=feature_cols + ["status"]).reset_index(drop=True)
+    dropped = before - len(df)
+    if dropped:
+        print(f"  Dropped {dropped} rows with missing values ({len(df)} remaining)")
+
+    # ── Encode labels ──
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    y = le.fit_transform(df["status"])  # legitimate=0, phishing=1
+    print(f"  Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    # ── Extract numeric features ──
+    X = df[feature_cols].values.astype(np.float64)
+    X = np.nan_to_num(X, nan=0.0)
+
+    # ── MinMax scaling ──
+    scaler = MinMaxScaler()
+    X = scaler.fit_transform(X)
+    print(f"  MinMax scaling applied — feature matrix shape: {X.shape}")
+
+    y = np.array(y, dtype=np.int32)
+
+    return {
+        "X": X,
+        "y": y,
+        "feature_names": feature_cols,
+        "le": le,
+        "scaler": scaler,
+    }
+
+
+# ── BiGRU-Attention pipeline preprocessing (Yuan et al. 2019) ─────────────────
+
+def bigru_preprocess(cfg):
+    """Full BiGRU-Attention preprocessing pipeline.
+
+    Steps (following the paper):
+      1. Load dataset via registry
+      2. Extract raw URL strings and labels
+      3. Character-level encoding: map each character to an integer index
+      4. Pad/truncate URL sequences to fixed length (150 chars, paper Sec 3.1)
+      5. Train/val/test split (8:1:1 as per the paper)
+
+    Returns dict with: X_char_train, X_char_val, X_char_test,
+                        y_train, y_val, y_test,
+                        char_vocab_size, char_to_idx, le
+    """
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder
+
+    bcfg = cfg["bigru"]
+    dataset_id = bcfg["dataset_id"]
+    seed = cfg["random_seed"]
+    char_max_len = bcfg["char_max_len"]
+
+    df = load_any_dataset(dataset_id, cfg)
+
+    # ── Encode labels ──
+    le = LabelEncoder()
+    labels = le.fit_transform(df["status"])  # legitimate=0, phishing=1
+    print(f"  Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    # ── Extract raw URL strings ──
+    urls = df["url"].astype(str).values
+    # Paper uses raw URL characters (lowercase not explicitly stated, but standard)
+    urls_clean = [u.strip() for u in urls]
+
+    # ── Character-level encoding (paper Section 3.1) ──
+    # Build character vocabulary from all URLs
+    print(f"\n── Preparing character-level URL input (max_len={char_max_len}) ──")
+    char_to_idx, char_vocab_size = _build_char_vocab(urls_clean)
+    print(f"  Character vocab size: {char_vocab_size}")
+
+    # Encode URLs: truncate to first char_max_len chars, pad with 0 in front
+    # Paper: "interpolated with zero in front of characters, if their length < 150"
+    X_char = np.array([
+        _encode_url_chars_front_pad(u, char_to_idx, char_max_len)
+        for u in urls_clean
+    ])
+    print(f"  Char-encoded shape: {X_char.shape}")
+
+    y = np.array(labels, dtype=np.float32)
+
+    # ── Train / Val / Test split (8:1:1 as per the paper) ──
+    test_size = bcfg["test_size"]
+    val_size = bcfg["val_size"]
+
+    idx = np.arange(len(y))
+    idx_trainval, idx_test, y_trainval, y_test = train_test_split(
+        idx, y, test_size=test_size, random_state=seed, stratify=y
+    )
+    # val_size is relative to remaining data
+    val_frac = val_size / (1.0 - test_size)
+    idx_train, idx_val, y_train, y_val = train_test_split(
+        idx_trainval, y_trainval, test_size=val_frac, random_state=seed,
+        stratify=y_trainval
+    )
+
+    print(f"\n  Train: {len(idx_train)}  |  Val: {len(idx_val)}  |  Test: {len(idx_test)}")
+
+    return {
+        "X_char_train": X_char[idx_train],
+        "X_char_val": X_char[idx_val],
+        "X_char_test": X_char[idx_test],
+        "y_train": y_train,
+        "y_val": y_val,
+        "y_test": y_test,
+        "char_vocab_size": char_vocab_size,
+        "char_to_idx": char_to_idx,
+        "le": le,
+    }
+
+
+# ── PSO-XGBoost pipeline preprocessing (Sheikhi & Kostakos 2024) ──────────────
+
+def pso_xgboost_preprocess(cfg):
+    """Full PSO-XGBoost preprocessing pipeline.
+
+    Steps (following the paper):
+      1. Load dataset via registry
+      2. Remove missing / null values
+      3. Encode labels (legitimate=0, phishing=1)
+      4. Apply MinMax scaling to features (required for XgbLinear booster)
+      5. Train/test split (80/20 as per the paper)
+
+    Returns dict with: X_train, X_test, y_train, y_test,
+                        feature_names, le, scaler
+    """
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+
+    xcfg = cfg["pso_xgboost"]
+    dataset_id = xcfg["dataset_id"]
+    seed = cfg["random_seed"]
+
+    df = load_any_dataset(dataset_id, cfg)
+
+    # ── Remove missing / null values ──
+    before = len(df)
+    drop_cols = ["url", "status"]
+    feature_cols = [c for c in df.columns if c not in drop_cols]
+    df = df.dropna(subset=feature_cols + ["status"]).reset_index(drop=True)
+    dropped = before - len(df)
+    if dropped:
+        print(f"  Dropped {dropped} rows with missing values ({len(df)} remaining)")
+
+    # ── Encode labels ──
+    le = LabelEncoder()
+    y = le.fit_transform(df["status"])  # legitimate=0, phishing=1
+    print(f"  Label mapping: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+
+    # ── Extract numeric features ──
+    X = df[feature_cols].values.astype(np.float64)
+    X = np.nan_to_num(X, nan=0.0)
+
+    # ── MinMax scaling (paper uses normalized features for XgbLinear) ──
+    scaler = MinMaxScaler()
+    X = scaler.fit_transform(X)
+    print(f"  MinMax scaling applied — feature matrix shape: {X.shape}")
+
+    y = np.array(y, dtype=np.int32)
+
+    # ── Train / Test split (80/20 per the paper) ──
+    test_size = xcfg["test_size"]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=seed, stratify=y
+    )
+    print(f"  Train: {X_train.shape[0]}  |  Test: {X_test.shape[0]}")
+
+    return {
+        "X_train": X_train,
+        "X_test": X_test,
+        "y_train": y_train,
+        "y_test": y_test,
+        "feature_names": feature_cols,
+        "le": le,
+        "scaler": scaler,
     }
 
 

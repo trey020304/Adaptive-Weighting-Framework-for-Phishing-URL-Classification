@@ -102,7 +102,7 @@ path_b:
 
 # --- Adaptive Weighting ---
 adaptive:
-  dataset_id: "9"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
+  dataset_id: "3"     # dataset for adaptive hybrid (overrides aqilla & princeton_improved)
   test_size: 0.20       # must match both paths for aligned splits
   val_size: 0.15        # must match both paths for aligned splits
   # Sensitivity coefficient candidates
@@ -243,5 +243,141 @@ princeton_improved:
   max_epochs: 50
   early_stopping_patience: 8
   reduce_lr_patience: 4
+  reduce_lr_factor: 0.5
+  reduce_lr_min: 0.000001
+
+# ============================================================
+# ODAE-WPDC — Optimal Deep Autoencoder for Website Phishing
+#              Detection and Classification (Alshehri et al. 2022)
+# ============================================================
+odae_wpdc:
+  dataset_id: "3"          # key from the datasets registry above
+
+  # Train/val/test split
+  test_size: 0.20
+  val_size: 0.15
+
+  # --- AAA (Artificial Algae Algorithm) Feature Selection ---
+  aaa:
+    population_size: 30      # number of algae colonies (N)
+    max_iterations: 100      # termination condition
+    energy: 10               # energy budget per colony for helical movement
+    alpha: 0.99              # weight for classifier accuracy in fitness; β = 1 − α
+    knn_neighbors: 5         # K for KNN used in fitness evaluation
+    adaptation_rate: 0.5     # probability of adaptation phase replacing worst colony
+    min_features: 3          # minimum features a solution must keep
+
+  # --- DAE (Deep Autoencoder) Classifier ---
+  dae:
+    # Encoder hidden layer sizes (decoder mirrors in reverse)
+    encoder_layers: [128, 64, 32]
+    activation: "relu"           # hidden layer activation
+    dropout_rate: 0.2
+    pretrain_epochs: 50          # greedy layer-wise pretraining epochs per layer
+    pretrain_learning_rate: 0.001
+    finetune_epochs: 200         # supervised fine-tuning epochs
+    finetune_learning_rate: 0.001
+    batch_size: 64
+    early_stopping_patience: 20
+
+  # --- IWO (Invasive Weed Optimization) for DAE Hyperparameters ---
+  iwo:
+    population_size: 10          # initial number of weeds
+    max_iterations: 20           # total iterations
+    max_population: 30           # competitive exclusion ceiling
+    smin: 1                      # minimum seeds per weed
+    smax: 5                      # maximum seeds per weed
+    sigma_init: 1.0              # initial standard deviation for spatial dispersal
+    sigma_final: 0.001           # final standard deviation
+    modulation_index: 3          # nonlinear modulation index (n in Eq. 9)
+    # Search space for DAE hyperparameters optimized by IWO
+    search_space:
+      encoder_layer1: [32, 256]     # range for first hidden layer size
+      encoder_layer2: [16, 128]     # range for second hidden layer size
+      encoder_layer3: [8, 64]       # range for bottleneck layer size
+      learning_rate: [0.0001, 0.01] # range for fine-tuning learning rate
+      dropout_rate: [0.1, 0.5]      # range for dropout rate
+
+  # --- Cross-Validation ---
+  cv_folds: 5                   # k-fold cross-validation
+
+# ============================================================
+# PSO-XGBoost — Particle Swarm Optimization + XGBoost Linear
+#               (Sheikhi & Kostakos, 2024, Computers & Security)
+# ============================================================
+pso_xgboost:
+  dataset_id: "3"              # key from the datasets registry above
+
+  # Train/test split (paper uses 80/20)
+  test_size: 0.20
+
+  # Cross-validation during PSO fitness evaluation
+  cv_folds: 10                 # 10-fold CV as per the paper
+
+  # --- XGBoost (XgbLinear) default hyperparameters ---
+  # These are defaults / fallbacks; PSO will optimize within the ranges below
+  xgb:
+    booster: "gblinear"        # linear booster (XgbLinear) as per the paper
+    nrounds: 100               # default number of boosting iterations
+    eta: 0.3                   # default learning rate
+    lambda_l2: 0.0             # default L2 regularization (Ridge)
+    alpha_l1: 1.0              # default L1 regularization (Lasso)
+    objective: "binary:logistic"
+    eval_metric: "logloss"
+    verbosity: 0
+
+  # --- PSO hyperparameter search space for XGBoost parameters ---
+  pso:
+    # PSO algorithm parameters (Table 4 in the paper)
+    num_particles: 10          # number of particles in the swarm
+    max_iterations: 100        # maximum PSO iterations
+    inertia_weight_max: 0.9    # ω_max (linearly decreasing inertia)
+    inertia_weight_min: 0.4    # ω_min
+    c1: 1.193                  # global learning factor
+    c2: 1.193                  # local learning factor
+
+    # Search ranges for XGBoost hyperparameters (Table 3 in the paper)
+    search_space:
+      nrounds: [10, 500]       # [min, max] number of boosting iterations (integer)
+      eta: [0.001, 1.0]        # [min, max] learning rate
+      lambda_l2: [0.001, 1.0]  # [min, max] L2 regularization term
+      alpha_l1: [0.001, 1.0]   # [min, max] L1 regularization term
+
+    # Fitness function: composite measure (accuracy, precision, recall, F1)
+    # Weights for the composite fitness score (higher is better)
+    fitness_weights:
+      accuracy: 0.25
+      precision: 0.25
+      recall: 0.25
+      f1: 0.25
+
+# ============================================================
+# BiGRU-Attention — Character-Level BiGRU-Attention
+#                   (Yuan et al., ICICS 2019, LNCS 11999)
+# ============================================================
+bigru:
+  dataset_id: "3"              # key from the datasets registry above
+
+  # Train/val/test split (paper uses 8:1:1)
+  test_size: 0.10
+  val_size: 0.10
+
+  # --- Character-level URL encoding ---
+  char_max_len: 150            # max URL length in characters (paper Section 3.1)
+
+  # --- Model architecture (Table 2 in the paper) ---
+  embedding_dim: 128           # word embedding dimension
+  gru_units: 60                # GRU hidden dimension (per direction)
+  attention_size: 80           # attention layer size
+
+  # --- Training hyperparameters (Table 2 in the paper) ---
+  batch_size: 256
+  max_epochs: 20
+  learning_rate: 0.001
+  optimizer: "adam"
+
+  # --- Early stopping (optional safeguard, not in original paper) ---
+  early_stopping_patience: 5
+  reduce_lr_patience: 3
   reduce_lr_factor: 0.5
   reduce_lr_min: 0.000001
