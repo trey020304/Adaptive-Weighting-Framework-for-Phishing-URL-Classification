@@ -29,6 +29,7 @@ from tensorflow import keras
 from keras import layers, Model, callbacks
 
 from preprocess import load_config, princeton_improved_preprocess
+from gpu_setup import configure_gpu
 
 
 # ──────────────────────────────────────────────
@@ -85,6 +86,7 @@ def train_path_b(cfg):
     icfg = cfg["princeton_improved"]
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
+    configure_gpu()
 
     # ── 1. Load & preprocess ──
     data = princeton_improved_preprocess(cfg)

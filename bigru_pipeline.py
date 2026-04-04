@@ -39,6 +39,7 @@ from tensorflow import keras
 from keras import layers, Model, callbacks
 
 from preprocess import load_config, bigru_preprocess
+from gpu_setup import configure_gpu
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -169,6 +170,7 @@ def train_bigru(cfg):
 
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
+    configure_gpu()
 
     print("\n" + "=" * 60)
     print("BiGRU-ATTENTION PIPELINE (Yuan et al. 2019)")

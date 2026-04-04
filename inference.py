@@ -31,6 +31,7 @@ from keras import layers
 import tensorflow as tf
 
 from preprocess import load_config, load_any_dataset, extract_features_from_url
+from gpu_setup import configure_gpu
 
 
 # ── Keras cross-version compatibility ──────────────────────────────────────────
@@ -218,6 +219,7 @@ def evaluate(y_true, y_proba, label=""):
 # ── Main inference ────────────────────────────────────────────────────────────
 def run_inference(ckpt_dir, dataset_id, cfg_path="config.yaml",
                   train_dataset_id=None):
+    configure_gpu()
     cfg = load_config(cfg_path)
     ckpt = load_checkpoint(ckpt_dir)
 

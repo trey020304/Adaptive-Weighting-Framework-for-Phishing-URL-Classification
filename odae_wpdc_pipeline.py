@@ -40,6 +40,7 @@ from tensorflow import keras
 from keras import layers, Model, callbacks
 
 from preprocess import load_config, odae_wpdc_preprocess
+from gpu_setup import configure_gpu
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -582,6 +583,7 @@ def train_odae_wpdc(cfg):
     ocfg = cfg["odae_wpdc"]
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
+    configure_gpu()
 
     # ── 1. Preprocess ──
     print("\n" + "=" * 60)
@@ -784,7 +786,8 @@ def train_odae_wpdc(cfg):
     print(f"\n  Total pipeline time: {total_time:.1f}s")
 
     # ── Save results ──
-    out_dir = os.path.join(cfg["output_dir"], "odae_wpdc")
+    out_dir = os.path.join(cfg["output_dir"], "odae_wpdc",
+                           f"dataset_{ocfg['dataset_id']}")
     os.makedirs(out_dir, exist_ok=True)
 
     results = {
