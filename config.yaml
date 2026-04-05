@@ -356,7 +356,7 @@ pso_xgboost:
 #                   (Yuan et al., ICICS 2019, LNCS 11999)
 # ============================================================
 bigru:
-  dataset_id: "3"              # key from the datasets registry above
+  dataset_id: "11"              # key from the datasets registry above
 
   # Train/val/test split (paper uses 8:1:1)
   test_size: 0.10

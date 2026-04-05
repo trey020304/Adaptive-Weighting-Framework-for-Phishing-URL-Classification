@@ -54,13 +54,19 @@ COLORS = {
     "path_b": "#FF9800",         # Orange
     "static_ensemble": "#9E9E9E", # Gray
     "adaptive_hybrid": "#4CAF50", # Green
+    "odae_wpdc": "#E91E63",      # Pink
+    "pso_xgboost": "#9C27B0",    # Purple
+    "bigru_attention": "#00BCD4", # Cyan
 }
 
 MODEL_LABELS = {
-    "path_a": "Path A (Chi-Square + Random Forest)",
+    "path_a": "Path A (Chi² + RF)",
     "path_b": "Path B (CNN-BiLSTM)",
     "static_ensemble": "Static Ensemble (0.5/0.5)",
     "adaptive_hybrid": "Adaptive Hybrid (Proposed)",
+    "odae_wpdc": "ODAE-WPDC",
+    "pso_xgboost": "PSO-XGBoost",
+    "bigru_attention": "BiGRU-Attention",
 }
 
 DATASET_LABELS = {
@@ -92,6 +98,94 @@ def load_adaptive_results():
             dataset_id = data.get("config", {}).get("dataset_id", d.replace("dataset_", ""))
             results[dataset_id] = data
     return results
+
+
+def load_baseline_results():
+    """Load all baseline model results (ODAE-WPDC, PSO-XGBoost, BiGRU-Attention)."""
+    baselines = {}  # {dataset_id: {model_key: {metric_name: value}}}
+
+    # ── ODAE-WPDC ──
+    odae_base = os.path.join(RESULTS_DIR, "odae_wpdc")
+    if os.path.isdir(odae_base):
+        for d in os.listdir(odae_base):
+            rpath = os.path.join(odae_base, d, "results.json")
+            if os.path.isfile(rpath):
+                with open(rpath) as f:
+                    data = json.load(f)
+                did = data.get("dataset_id", d.replace("dataset_", ""))
+                pred = data.get("predictive_metrics", {})
+                comp = data.get("computational_metrics", {})
+                baselines.setdefault(did, {})["odae_wpdc"] = {
+                    "accuracy": pred.get("accuracy", {}).get("mean"),
+                    "precision": pred.get("precision", {}).get("mean"),
+                    "recall": pred.get("recall", {}).get("mean"),
+                    "f1": pred.get("f1", {}).get("mean"),
+                    "roc_auc": pred.get("roc_auc", {}).get("mean"),
+                    "confusion_matrix_per_fold": pred.get("confusion_matrix_per_fold"),
+                    "training_time_s": comp.get("training_time_s", {}).get("mean"),
+                    "inference_ms_per_sample": comp.get("inference_ms_per_sample", {}).get("mean"),
+                    "model_size_mb": comp.get("model_size_mb", {}).get("mean"),
+                    "total_pipeline_time_s": data.get("total_pipeline_time_s"),
+                    "_raw": data,
+                }
+
+    # ── PSO-XGBoost ──
+    pso_base = os.path.join(RESULTS_DIR, "pso_xgboost")
+    if os.path.isdir(pso_base):
+        for d in os.listdir(pso_base):
+            rpath = os.path.join(pso_base, d, "results.json")
+            if os.path.isfile(rpath):
+                with open(rpath) as f:
+                    data = json.load(f)
+                did = data.get("dataset_id", d.replace("dataset_", ""))
+                test = data.get("test_metrics", {})
+                comp = data.get("computational_metrics", {})
+                baselines.setdefault(did, {})["pso_xgboost"] = {
+                    "accuracy": test.get("accuracy"),
+                    "precision": test.get("precision"),
+                    "recall": test.get("recall"),
+                    "f1": test.get("f1"),
+                    "roc_auc": test.get("roc_auc"),
+                    "confusion_matrix": test.get("confusion_matrix"),
+                    "training_time_s": comp.get("train_time_s"),
+                    "inference_ms_per_sample": comp.get("inference_ms_per_sample"),
+                    "model_size_mb": comp.get("model_size_mb"),
+                    "total_pipeline_time_s": data.get("total_pipeline_time_s"),
+                    "pso_time_s": comp.get("pso_time_s"),
+                    "_raw": data,
+                }
+
+    # ── BiGRU-Attention ──
+    bigru_base = os.path.join(RESULTS_DIR, "bigru")
+    if os.path.isdir(bigru_base):
+        for variant in os.listdir(bigru_base):
+            variant_path = os.path.join(bigru_base, variant)
+            if not os.path.isdir(variant_path):
+                continue
+            for d in os.listdir(variant_path):
+                rpath = os.path.join(variant_path, d, "results.json")
+                if os.path.isfile(rpath):
+                    with open(rpath) as f:
+                        data = json.load(f)
+                    did = data.get("dataset_id", d.replace("dataset_", ""))
+                    test = data.get("test_metrics", {})
+                    comp = data.get("computational_metrics", {})
+                    baselines.setdefault(did, {})["bigru_attention"] = {
+                        "accuracy": test.get("accuracy"),
+                        "precision": test.get("precision"),
+                        "recall": test.get("recall"),
+                        "f1": test.get("f1"),
+                        "roc_auc": test.get("roc_auc"),
+                        "confusion_matrix": test.get("confusion_matrix"),
+                        "training_time_s": comp.get("training_time_s"),
+                        "inference_ms_per_sample": comp.get("inference_ms_per_sample"),
+                        "model_size_mb": comp.get("model_size_mb"),
+                        "total_pipeline_time_s": data.get("total_pipeline_time_s"),
+                        "training_history": data.get("training_history"),
+                        "_raw": data,
+                    }
+
+    return baselines
 
 
 def save_fig(fig, name):
@@ -785,6 +879,477 @@ def chart_combined_loss_analysis(adaptive_results):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  Chart 15: All Models Performance Comparison (Framework + Baselines)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_models_comparison(adaptive_results, baselines):
+    """Grouped bar chart: framework components + all baselines on shared datasets."""
+    metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
+    metric_labels = ["Accuracy", "Precision", "Recall", "F1 Score", "ROC-AUC"]
+
+    # Find datasets that have at least one baseline
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+    if not common_datasets:
+        print("  (skipped — no overlapping datasets between adaptive & baselines)")
+        return
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+
+        # Collect all models: framework first, then baselines
+        models = {}
+        for mk in ["path_a", "path_b", "adaptive_hybrid"]:
+            if mk in ad["metrics"]:
+                models[mk] = {m: ad["metrics"][mk].get(m, 0) for m in metrics}
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            if mk in bl:
+                models[mk] = {m: bl[mk].get(m, 0) for m in metrics}
+
+        n_metrics = len(metrics)
+        n_models = len(models)
+        x = np.arange(n_metrics)
+        width = 0.8 / n_models
+
+        fig, ax = plt.subplots(figsize=(14, 6.5))
+
+        for i, (mk, md) in enumerate(models.items()):
+            vals = [md.get(m, 0) for m in metrics]
+            bars = ax.bar(
+                x + i * width - (n_models - 1) * width / 2,
+                vals, width,
+                label=MODEL_LABELS.get(mk, mk),
+                color=COLORS.get(mk, "#666"),
+                edgecolor="white", linewidth=0.5,
+            )
+            for bar, val in zip(bars, vals):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.001,
+                        f"{val:.4f}", ha="center", va="bottom", fontsize=6.5, rotation=55)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_labels)
+        ax.set_ylabel("Score")
+        ax.set_title(f"All Models Performance Comparison — {DATASET_LABELS.get(dataset_id, dataset_id)}")
+        all_vals = [v for md in models.values() for v in md.values() if v]
+        ax.set_ylim(bottom=max(0.85, min(all_vals) - 0.02))
+        ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+        fig.tight_layout()
+        save_fig(fig, f"15_all_models_comparison_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 16: Framework vs Baselines — F1 Score Comparison
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_f1_comparison(adaptive_results, baselines):
+    """Horizontal bar chart ranking all models by F1 score."""
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+
+        # Gather F1 scores
+        model_f1 = []
+        for mk in ["path_a", "path_b", "static_ensemble", "adaptive_hybrid"]:
+            f1 = ad.get("metrics", {}).get(mk, {}).get("f1")
+            if f1 is not None:
+                model_f1.append((mk, f1))
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            f1 = bl.get(mk, {}).get("f1")
+            if f1 is not None:
+                model_f1.append((mk, f1))
+
+        # Sort by F1 ascending (for horizontal bar)
+        model_f1.sort(key=lambda x: x[1])
+
+        fig, ax = plt.subplots(figsize=(10, max(4, len(model_f1) * 0.8)))
+        names = [MODEL_LABELS.get(mk, mk) for mk, _ in model_f1]
+        vals = [f1 for _, f1 in model_f1]
+        colors = [COLORS.get(mk, "#666") for mk, _ in model_f1]
+
+        bars = ax.barh(range(len(names)), vals, color=colors, edgecolor="white", height=0.6)
+        for bar, val in zip(bars, vals):
+            ax.text(bar.get_width() + 0.002, bar.get_y() + bar.get_height() / 2,
+                    f"{val:.4f}", va="center", fontsize=10)
+
+        # Highlight the proposed method
+        for i, (mk, _) in enumerate(model_f1):
+            if mk == "adaptive_hybrid":
+                bars[i].set_edgecolor("#333")
+                bars[i].set_linewidth(2)
+
+        ax.set_xlabel("F1 Score")
+        ax.set_yticks(range(len(names)))
+        ax.set_yticklabels(names)
+        low = max(0.85, min(vals) - 0.02)
+        ax.set_xlim(left=low)
+        ax.set_title(f"F1 Score Ranking — {DATASET_LABELS.get(dataset_id, dataset_id)}")
+        fig.tight_layout()
+        save_fig(fig, f"16_f1_ranking_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 17B: Confusion Matrices — All Models Side-by-Side
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_confusion_matrices(adaptive_results, baselines):
+    """Side-by-side normalized confusion matrix heatmaps for all models."""
+    labels = ["Non-Phishing", "Phishing"]
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+
+        # Collect all confusion matrices
+        cm_data = []  # list of (model_key, cm_array)
+        for mk in ["path_a", "path_b", "adaptive_hybrid"]:
+            cm = ad.get("metrics", {}).get(mk, {}).get("confusion_matrix")
+            if cm:
+                cm_data.append((mk, np.array(cm)))
+
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            if mk not in bl:
+                continue
+            cm = bl[mk].get("confusion_matrix")
+            if cm:
+                cm_data.append((mk, np.array(cm)))
+            elif bl[mk].get("confusion_matrix_per_fold"):
+                # Average across folds for ODAE-WPDC
+                cms = bl[mk]["confusion_matrix_per_fold"]
+                cm_avg = np.mean([np.array(c) for c in cms], axis=0).astype(int)
+                cm_data.append((mk, cm_avg))
+
+        if not cm_data:
+            continue
+
+        n = len(cm_data)
+        cols = min(n, 3)
+        rows = (n + cols - 1) // cols
+        fig, axes = plt.subplots(rows, cols, figsize=(5.5 * cols, 4.5 * rows), squeeze=False)
+
+        for idx, (mk, cm) in enumerate(cm_data):
+            r, c = divmod(idx, cols)
+            ax = axes[r][c]
+            cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+            sns.heatmap(cm_norm, annot=True, fmt=".2%", cmap="Blues" if mk != "adaptive_hybrid" else "Greens",
+                        xticklabels=labels, yticklabels=labels,
+                        ax=ax, vmin=0, vmax=1, cbar=False)
+            for ri in range(2):
+                for ci in range(2):
+                    ax.text(ci + 0.5, ri + 0.72, f"(n={cm[ri, ci]})",
+                            ha="center", va="center", fontsize=8, color="gray")
+            ax.set_title(MODEL_LABELS.get(mk, mk), fontsize=10)
+            ax.set_ylabel("True" if c == 0 else "")
+            ax.set_xlabel("Predicted")
+
+        # Hide unused subplots
+        for idx in range(n, rows * cols):
+            r, c = divmod(idx, cols)
+            axes[r][c].set_visible(False)
+
+        fig.suptitle(f"Confusion Matrices — All Models — {DATASET_LABELS.get(dataset_id, dataset_id)}",
+                     fontsize=14, y=1.02)
+        fig.tight_layout()
+        save_fig(fig, f"17_all_confusion_matrices_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 18B: Computational Efficiency — All Models
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_computational_efficiency(adaptive_results, baselines):
+    """3-panel comparison of training time, inference latency, model size for all models."""
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+        comp = ad.get("computational", {})
+
+        models = {}
+        # Framework models
+        prefix_map = {"path_a": "path_a", "path_b": "path_b", "adaptive_hybrid": "adaptive"}
+        for mk, prefix in prefix_map.items():
+            tt = comp.get(f"{prefix}_train_time_s", 0)
+            inf = comp.get(f"{prefix}_inference_ms", 0)
+            sz = comp.get(f"{prefix}_model_size_mb", 0)
+            if tt or inf or sz:
+                models[mk] = {"train_time": tt, "inference_ms": inf, "model_size": sz}
+
+        # Baselines
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            if mk not in bl:
+                continue
+            models[mk] = {
+                "train_time": bl[mk].get("training_time_s", 0) or 0,
+                "inference_ms": bl[mk].get("inference_ms_per_sample", 0) or 0,
+                "model_size": bl[mk].get("model_size_mb", 0) or 0,
+            }
+
+        if len(models) < 2:
+            continue
+
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5.5))
+        model_keys = list(models.keys())
+        names = [MODEL_LABELS.get(k, k) for k in model_keys]
+        colors = [COLORS.get(k, "#666") for k in model_keys]
+
+        # Training time
+        vals = [models[k]["train_time"] for k in model_keys]
+        bars = ax1.bar(range(len(names)), vals, color=colors, edgecolor="white")
+        for bar, val in zip(bars, vals):
+            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(vals) * 0.02,
+                     f"{val:.1f}s", ha="center", va="bottom", fontsize=8)
+        ax1.set_xticks(range(len(names)))
+        ax1.set_xticklabels(names, rotation=30, ha="right", fontsize=8)
+        ax1.set_ylabel("Seconds")
+        ax1.set_title("Training Time")
+
+        # Inference latency (log scale if wide range)
+        vals = [models[k]["inference_ms"] for k in model_keys]
+        bars = ax2.bar(range(len(names)), vals, color=colors, edgecolor="white")
+        for bar, val in zip(bars, vals):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(vals) * 0.02,
+                     f"{val:.4f}", ha="center", va="bottom", fontsize=8)
+        ax2.set_xticks(range(len(names)))
+        ax2.set_xticklabels(names, rotation=30, ha="right", fontsize=8)
+        ax2.set_ylabel("ms / sample")
+        ax2.set_title("Inference Latency")
+
+        # Model size
+        vals = [models[k]["model_size"] for k in model_keys]
+        bars = ax3.bar(range(len(names)), vals, color=colors, edgecolor="white")
+        for bar, val in zip(bars, vals):
+            ax3.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(vals) * 0.02,
+                     f"{val:.2f}", ha="center", va="bottom", fontsize=8)
+        ax3.set_xticks(range(len(names)))
+        ax3.set_xticklabels(names, rotation=30, ha="right", fontsize=8)
+        ax3.set_ylabel("MB")
+        ax3.set_title("Model Size")
+
+        fig.suptitle(f"Computational Efficiency — All Models — {DATASET_LABELS.get(dataset_id, dataset_id)}",
+                     fontsize=14, y=1.02)
+        fig.tight_layout()
+        save_fig(fig, f"18_all_computational_efficiency_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 19B: Efficiency-Accuracy Tradeoff — All Models
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_efficiency_tradeoff(adaptive_results, baselines):
+    """Scatter: x = training time (log), y = F1 — all models."""
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+        comp = ad.get("computational", {})
+
+        points = []  # (model_key, train_time, f1, inference_ms)
+
+        # Framework
+        for mk, prefix in [("path_a", "path_a"), ("path_b", "path_b"), ("adaptive_hybrid", "adaptive")]:
+            f1 = ad.get("metrics", {}).get(mk, {}).get("f1", 0)
+            tt = comp.get(f"{prefix}_train_time_s", 0)
+            inf = comp.get(f"{prefix}_inference_ms", 0)
+            if f1 and tt:
+                points.append((mk, tt, f1, inf))
+
+        # Baselines
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            if mk not in bl:
+                continue
+            f1 = bl[mk].get("f1", 0)
+            tt = bl[mk].get("training_time_s", 0) or 0
+            inf = bl[mk].get("inference_ms_per_sample", 0) or 0
+            if f1 and tt:
+                points.append((mk, tt, f1, inf))
+
+        if len(points) < 2:
+            continue
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+        for mk, tt, f1, inf in points:
+            size = max(100, inf * 200)
+            ax.scatter(tt, f1, s=size, c=COLORS.get(mk, "#666"),
+                       label=MODEL_LABELS.get(mk, mk),
+                       edgecolors="black", linewidth=0.8, alpha=0.85, zorder=5)
+            ax.annotate(f"F1={f1:.4f}\n{tt:.1f}s",
+                        (tt, f1), textcoords="offset points",
+                        xytext=(12, 5), fontsize=8,
+                        arrowprops=dict(arrowstyle="->", color="gray", lw=0.5))
+
+        ax.set_xscale("log")
+        ax.set_xlabel("Training Time (seconds, log scale)")
+        ax.set_ylabel("F1 Score")
+        ax.set_title(f"Efficiency–Accuracy Tradeoff — All Models — {DATASET_LABELS.get(dataset_id, dataset_id)}\n"
+                     "(bubble size ∝ inference latency)")
+        ax.legend(loc="lower right", fontsize=8)
+        fig.tight_layout()
+        save_fig(fig, f"19_all_efficiency_tradeoff_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 20B: Radar — Framework vs All Baselines
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_radar(adaptive_results, baselines):
+    """Radar chart comparing proposed framework against all baselines."""
+    metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
+    metric_labels = ["Accuracy", "Precision", "Recall", "F1", "ROC-AUC"]
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+
+        models_data = {}
+        for mk in ["path_a", "path_b", "adaptive_hybrid"]:
+            if mk in ad["metrics"]:
+                models_data[mk] = [ad["metrics"][mk].get(m, 0) for m in metrics]
+        for mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+            if mk in bl:
+                models_data[mk] = [bl[mk].get(m, 0) or 0 for m in metrics]
+
+        if len(models_data) < 2:
+            continue
+
+        angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+        angles += angles[:1]
+
+        fig, ax = plt.subplots(figsize=(9, 9), subplot_kw=dict(polar=True))
+
+        for mk, vals in models_data.items():
+            vals_closed = vals + vals[:1]
+            ax.fill(angles, vals_closed, alpha=0.1, color=COLORS.get(mk, "#666"))
+            ax.plot(angles, vals_closed, "o-", color=COLORS.get(mk, "#666"),
+                    label=MODEL_LABELS.get(mk, mk), linewidth=2, markersize=5)
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(metric_labels)
+        all_vals = [v for vals in models_data.values() for v in vals if v]
+        min_val = max(0.85, min(all_vals) - 0.02) if all_vals else 0.85
+        ax.set_ylim(min_val, 1.0)
+        ax.set_title(f"All Models Radar — {DATASET_LABELS.get(dataset_id, dataset_id)}",
+                     y=1.08, fontsize=13)
+        ax.legend(loc="lower right", bbox_to_anchor=(1.3, 0), fontsize=8)
+        fig.tight_layout()
+        save_fig(fig, f"20_all_radar_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Chart 21: Comprehensive Summary Table — All Models
+# ══════════════════════════════════════════════════════════════════════════════
+
+def chart_all_summary_table(adaptive_results, baselines):
+    """Publication-ready table figure with all models and all metrics."""
+    pred_metrics = ["accuracy", "precision", "recall", "f1", "roc_auc"]
+    pred_labels = ["Accuracy", "Precision", "Recall", "F1", "ROC-AUC"]
+    common_datasets = sorted(set(adaptive_results.keys()) & set(baselines.keys()))
+
+    for dataset_id in common_datasets:
+        ad = adaptive_results[dataset_id]
+        bl = baselines[dataset_id]
+        comp = ad.get("computational", {})
+
+        model_order = ["odae_wpdc", "pso_xgboost", "bigru_attention",
+                       "path_a", "path_b", "static_ensemble", "adaptive_hybrid"]
+        all_cols = pred_labels + ["Train (s)", "Inf (ms)", "Size (MB)"]
+
+        rows = []
+        row_labels = []
+        present_models = []
+
+        for mk in model_order:
+            # Get predictive metrics
+            if mk in ["odae_wpdc", "pso_xgboost", "bigru_attention"]:
+                if mk not in bl:
+                    continue
+                pred_vals = [bl[mk].get(m) for m in pred_metrics]
+                tt = bl[mk].get("training_time_s", 0) or 0
+                inf = bl[mk].get("inference_ms_per_sample", 0) or 0
+                sz = bl[mk].get("model_size_mb", 0) or 0
+            else:
+                m_data = ad.get("metrics", {}).get(mk)
+                if not m_data:
+                    continue
+                pred_vals = [m_data.get(m) for m in pred_metrics]
+                prefix = {"path_a": "path_a", "path_b": "path_b",
+                          "static_ensemble": "adaptive", "adaptive_hybrid": "adaptive"}.get(mk, mk)
+                tt = comp.get(f"{prefix}_train_time_s", 0)
+                inf = comp.get(f"{prefix}_inference_ms", 0)
+                sz = comp.get(f"{prefix}_model_size_mb", 0)
+
+            row = []
+            for v in pred_vals:
+                row.append(f"{v:.4f}" if v is not None else "N/A")
+            row.append(f"{tt:.2f}" if tt else "N/A")
+            row.append(f"{inf:.4f}" if inf else "N/A")
+            row.append(f"{sz:.2f}" if sz else "N/A")
+            rows.append(row)
+            row_labels.append(MODEL_LABELS.get(mk, mk))
+            present_models.append(mk)
+
+        if not rows:
+            continue
+
+        fig, ax = plt.subplots(figsize=(16, 1.5 + 0.55 * len(rows)))
+        ax.axis("off")
+
+        table = ax.table(
+            cellText=rows,
+            rowLabels=row_labels,
+            colLabels=all_cols,
+            loc="center",
+            cellLoc="center",
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        table.scale(1.0, 1.8)
+
+        # Style header
+        for j in range(len(all_cols)):
+            table[0, j].set_facecolor("#37474F")
+            table[0, j].set_text_props(color="white", fontweight="bold")
+
+        # Highlight best predictive values per column
+        for j in range(len(pred_metrics)):
+            col_vals = []
+            for i in range(len(rows)):
+                try:
+                    col_vals.append(float(rows[i][j]))
+                except (ValueError, IndexError):
+                    col_vals.append(None)
+            valid = [v for v in col_vals if v is not None]
+            if valid:
+                best = max(valid)
+                for i, v in enumerate(col_vals):
+                    if v is not None and abs(v - best) < 1e-8:
+                        table[i + 1, j].set_text_props(fontweight="bold")
+                        table[i + 1, j].set_facecolor("#C8E6C9")
+
+        # Color row labels by model color
+        for i, mk in enumerate(present_models):
+            color = COLORS.get(mk, "#FFFFFF")
+            table[i + 1, -1].set_facecolor(color + "20")
+            # Highlight proposed method row
+            if mk == "adaptive_hybrid":
+                for j in range(len(all_cols)):
+                    cell = table[i + 1, j]
+                    if cell.get_facecolor()[:3] != (0.784, 0.902, 0.784):  # not already green
+                        current = cell.get_facecolor()
+                        cell.set_edgecolor("#4CAF50")
+
+        ax.set_title(f"Comprehensive Performance Summary — {DATASET_LABELS.get(dataset_id, dataset_id)}",
+                     fontsize=14, pad=20)
+        fig.tight_layout()
+        save_fig(fig, f"21_all_summary_table_dataset_{dataset_id}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -796,9 +1361,13 @@ def main():
     print("=" * 60)
 
     # Load data
-    print("\nLoading adaptive_hybrid results...")
+    print("\nLoading results...")
     adaptive_results = load_adaptive_results()
-    print(f"  Found {len(adaptive_results)} dataset(s): {sorted(adaptive_results.keys())}")
+    baselines = load_baseline_results()
+    print(f"  Adaptive Hybrid: {len(adaptive_results)} dataset(s): {sorted(adaptive_results.keys())}")
+    print(f"  Baselines: {len(baselines)} dataset(s): {sorted(baselines.keys())}")
+    for did, bl in sorted(baselines.items()):
+        print(f"    Dataset {did}: {', '.join(sorted(bl.keys()))}")
 
     if not adaptive_results:
         print("No adaptive_hybrid results found. Exiting.")
@@ -808,47 +1377,77 @@ def main():
     print(f"\nGenerating charts to: {CHARTS_DIR}/")
     print("-" * 60)
 
-    print("\n[1/14] Model Performance Comparison...")
+    # ── Part I: Framework-only charts (1-14) ──
+    print("\n── Part I: Framework Analysis ──")
+
+    print("\n[1/20] Model Performance Comparison (framework)...")
     chart_model_comparison(adaptive_results)
 
-    print("[2/14] Log-Loss Comparison...")
+    print("[2/20] Log-Loss Comparison...")
     chart_log_loss_comparison(adaptive_results)
 
-    print("[3/14] Adaptive Weight Evolution...")
+    print("[3/20] Adaptive Weight Evolution...")
     chart_weight_evolution(adaptive_results)
 
-    print("[4/14] Confusion Matrices...")
+    print("[4/20] Confusion Matrices (framework)...")
     chart_confusion_matrices(adaptive_results)
 
-    print("[5/14] Computational Efficiency...")
+    print("[5/20] Computational Efficiency (framework)...")
     chart_computational_efficiency(adaptive_results)
 
-    print("[6/14] Efficiency-Accuracy Tradeoff...")
+    print("[6/20] Efficiency-Accuracy Tradeoff (framework)...")
     chart_efficiency_accuracy_tradeoff(adaptive_results)
 
-    print("[7/14] Radar Comparison...")
+    print("[7/20] Radar Comparison (framework)...")
     chart_radar_comparison(adaptive_results)
 
-    print("[8/14] Cross-Dataset Heatmap...")
+    print("[8/20] Cross-Dataset Heatmap...")
     chart_cross_dataset_heatmap(adaptive_results)
 
-    print("[9/14] Adaptive vs Static Progression...")
+    print("[9/20] Adaptive vs Static Progression...")
     chart_adaptive_vs_static(adaptive_results)
 
-    print("[10/14] Gamma Sensitivity...")
+    print("[10/20] Gamma Sensitivity...")
     chart_gamma_comparison(adaptive_results)
 
-    print("[11/14] Weight Distribution...")
+    print("[11/20] Weight Distribution...")
     chart_weight_distribution(adaptive_results)
 
-    print("[12/14] Convergence Rate...")
+    print("[12/20] Convergence Rate...")
     chart_convergence_rate(adaptive_results)
 
-    print("[13/14] Summary Tables...")
+    print("[13/20] Summary Tables (framework)...")
     chart_summary_table(adaptive_results)
 
-    print("[14/14] Combined Loss Analysis...")
+    print("[14/20] Combined Loss Analysis...")
     chart_combined_loss_analysis(adaptive_results)
+
+    # ── Part II: Framework vs Baselines (15-21) ──
+    print("\n── Part II: Framework vs Baselines ──")
+
+    if baselines:
+        print("\n[15/20] All Models Performance Comparison...")
+        chart_all_models_comparison(adaptive_results, baselines)
+
+        print("[16/20] F1 Score Ranking...")
+        chart_f1_comparison(adaptive_results, baselines)
+
+        print("[17/20] All Confusion Matrices...")
+        chart_all_confusion_matrices(adaptive_results, baselines)
+
+        print("[18/20] All Computational Efficiency...")
+        chart_all_computational_efficiency(adaptive_results, baselines)
+
+        print("[19/20] All Efficiency-Accuracy Tradeoff...")
+        chart_all_efficiency_tradeoff(adaptive_results, baselines)
+
+        print("[20/20] All Radar Comparison...")
+        chart_all_radar(adaptive_results, baselines)
+
+        print("[21] Comprehensive Summary Table...")
+        chart_all_summary_table(adaptive_results, baselines)
+    else:
+        print("\n  (No baseline results found — skipping charts 15-21)")
 
     # Summary
     chart_files = [f for f in os.listdir(CHARTS_DIR) if f.endswith(f".{FIG_FORMAT}")]
